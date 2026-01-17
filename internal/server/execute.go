@@ -16,7 +16,7 @@ func (l *EventLoop) execute(cmd Command) {
 
 	if l.Role == RoleReplica {
 		switch strings.ToUpper(args[0]) {
-		case "GET", "INFO", "PING", "TTL", "EXISTS":
+		case "GET", "INFO", "PING", "TTL", "EXISTS", "PROMOTE":
 			// allowed
 		default:
 			protocol.WriteError(conn, "READONLY You can't write against a replica")
@@ -138,6 +138,15 @@ func (l *EventLoop) execute(cmd Command) {
 		l.MasterUp = false
 
 		go l.startReplication(host, port)
+		protocol.WriteSimpleString(conn, "OK")
+
+	case "PROMOTE":
+		if l.Role != RoleReplica {
+			protocol.WriteError(conn, "only replicas can be promoted")
+			return
+		}
+
+		l.promoteToLeader()
 		protocol.WriteSimpleString(conn, "OK")
 
 	default:

@@ -55,15 +55,19 @@ func (l *EventLoop) startReplication(host, port string) {
 
 	// Live stream
 	for {
-		args, err := protocol.ReadCommand(reader)
-		if err != nil {
-			fmt.Println("replicate: error reading live command:", err)
+		select {
+		case <-l.StopReplication:
+			fmt.Println("[replica] replication stopped")
 			return
+		default:
+			args, err := protocol.ReadCommand(reader)
+			if err != nil {
+				return
+			}
+			l.applyReplicaCommand(args)
 		}
-
-		fmt.Println("replicate: applying live command:", strings.Join(args, " "))
-		l.applyReplicaCommand(args)
 	}
+
 }
 
 func (l *EventLoop) handleReplica(r *Replica) {
@@ -103,4 +107,23 @@ func (l *EventLoop) applyReplicaCommand(args []string) {
 	case "DEL":
 		l.Store.Del(args[1])
 	}
+}
+
+func (l *EventLoop) promoteToLeader() {
+	fmt.Println("[failover] promoting replica to leader")
+
+	// Change role
+	l.Role = RoleLeader
+
+	// Clear master info
+	l.MasterHost = ""
+	l.MasterPort = ""
+	l.MasterUp = false
+
+	// Stop replication stream
+	close(l.StopReplication)
+	// (simplest: rely on connection close)
+	// More advanced: use context / channel close
+
+	fmt.Println("[failover] promotion complete")
 }

@@ -35,16 +35,17 @@ type Replica struct {
 }
 
 type EventLoop struct {
-	Store        *store.Store
-	Commands     chan Command
-	AOF          *persistence.AOF
-	MaxMemory    int64
-	LRUSamples   int
-	StartTime    time.Time
-	CommandsSeen int64
-	Role         ServerRole
-	Replicas     []*Replica
-	MasterHost   string
-	MasterPort   string
-	MasterUp     bool
+	Store           *store.Store
+	Commands        chan Command
+	AOF             *persistence.AOF
+	MaxMemory       int64
+	LRUSamples      int
+	StartTime       time.Time
+	CommandsSeen    int64
+	Role            ServerRole
+	Replicas        []*Replica
+	MasterHost      string
+	MasterPort      string
+	MasterUp        bool
+	StopReplication chan struct{}
 }

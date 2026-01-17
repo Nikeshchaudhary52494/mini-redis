@@ -15,6 +15,7 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *Ev
 		LRUSamples: 5,
 		StartTime:  time.Now(),
 		Role:       RoleLeader,
+		StopReplication: make(chan struct{}),
 	}
 }
 
