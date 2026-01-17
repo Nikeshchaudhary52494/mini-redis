@@ -65,3 +65,42 @@ func (l *EventLoop) startReplication(host, port string) {
 		l.applyReplicaCommand(args)
 	}
 }
+
+func (l *EventLoop) handleReplica(r *Replica) {
+	fmt.Println("[leader] FULLRESYNC")
+
+	protocol.WriteArray(r.Conn, []string{"FULLRESYNC"})
+
+	for _, cmd := range l.Store.SnapshotCommands() {
+		protocol.WriteArray(r.Conn, cmd)
+	}
+
+	protocol.WriteArray(r.Conn, []string{"STREAM"})
+
+	l.Replicas = append(l.Replicas, r)
+
+	go func() {
+		for args := range r.Ch {
+			protocol.WriteArray(r.Conn, args)
+		}
+	}()
+}
+
+func (l *EventLoop) propagateToReplicas(args []string) {
+	for _, r := range l.Replicas {
+		select {
+		case r.Ch <- args:
+		default:
+			fmt.Println("replica lagging")
+		}
+	}
+}
+
+func (l *EventLoop) applyReplicaCommand(args []string) {
+	switch strings.ToUpper(args[0]) {
+	case "SET":
+		l.Store.Set(args[1], args[2], 0)
+	case "DEL":
+		l.Store.Del(args[1])
+	}
+}
