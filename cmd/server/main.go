@@ -31,8 +31,8 @@ func main() {
 			st.Del(cmd[1])
 		}
 	})
-
-	loop := server.NewEventLoop(st, aof)
+	const maxMemory = 1024 * 1024 // 1MB
+	loop := server.NewEventLoop(st, aof, maxMemory)
 	go loop.Start()
 	server.StartExpiryTicker(loop)
 	tcp := server.NewTCPServer(":6379", loop)

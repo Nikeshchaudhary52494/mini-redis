@@ -25,16 +25,20 @@ type Command struct {
 }
 
 type EventLoop struct {
-	Store    *store.Store
-	Commands chan Command
-	AOF      *persistence.AOF
+	Store      *store.Store
+	Commands   chan Command
+	AOF        *persistence.AOF
+	MaxMemory  int64
+	LRUSamples int
 }
 
-func NewEventLoop(store *store.Store, aof *persistence.AOF) *EventLoop {
+func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
 	return &EventLoop{
-		Store:    store,
-		Commands: make(chan Command, 1024),
-		AOF:      aof,
+		Store:      store,
+		Commands:   make(chan Command, 1024),
+		AOF:        aof,
+		MaxMemory:  maxMemory,
+		LRUSamples: 5, // Redis default
 	}
 }
 
@@ -75,6 +79,7 @@ func (l *EventLoop) execute(cmd Command) {
 		}
 
 		l.Store.Set(args[1], args[2], ttl)
+		l.enforceMaxMemory()
 
 		if l.AOF != nil {
 			_ = l.AOF.Append(args)
@@ -167,4 +172,13 @@ func StartExpiryTicker(loop *EventLoop) {
 			}
 		}
 	}()
+}
+
+func (l *EventLoop) enforceMaxMemory() {
+	for l.Store.ApproxSize() > l.MaxMemory {
+		evicted := l.Store.EvictLRU(l.LRUSamples)
+		if !evicted {
+			break
+		}
+	}
 }
