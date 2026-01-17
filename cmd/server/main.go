@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"mini-redis/internal/persistence"
 	"mini-redis/internal/server"
@@ -10,11 +11,20 @@ import (
 )
 
 func main() {
-	fmt.Println("mini-redis PID:", os.Getpid())
+	// 🔥 Read port from CLI
+	port := flag.Int("port", 6379, "port to run server on")
+	flag.Parse()
+
+	addr := fmt.Sprintf(":%d", *port)
+
+	fmt.Println("mini-redis starting on", addr)
+	fmt.Println("PID:", os.Getpid())
+
 	st := store.NewStore()
 
+	// 🔥 Separate AOF per instance
 	aof, err := persistence.NewAOF(
-		"appendonly.aof",
+		fmt.Sprintf("appendonly-%d.aof", *port),
 		persistence.FsyncEverySec,
 	)
 	if err != nil {
@@ -23,7 +33,6 @@ func main() {
 
 	// Replay persisted commands
 	_ = aof.Replay(func(cmd []string) {
-		// Apply without writing again
 		switch strings.ToUpper(cmd[0]) {
 		case "SET":
 			st.Set(cmd[1], cmd[2], 0)
@@ -31,11 +40,14 @@ func main() {
 			st.Del(cmd[1])
 		}
 	})
+
 	const maxMemory = 1024 * 1024 // 1MB
 	loop := server.NewEventLoop(st, aof, maxMemory)
+
 	go loop.Start()
 	server.StartExpiryTicker(loop)
-	tcp := server.NewTCPServer(":6379", loop)
+
+	tcp := server.NewTCPServer(addr, loop)
 	if err := tcp.Start(); err != nil {
 		panic(err)
 	}

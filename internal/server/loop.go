@@ -19,19 +19,17 @@ const (
 	InternalExpireCommand
 )
 
-type CommandSource int
+type ServerRole int
 
 const (
-	SourceClient CommandSource = iota
-	SourceAOFReplay
-	SourceInternal
+	RoleLeader ServerRole = iota
+	RoleReplica
 )
 
 type Command struct {
 	Type   CommandType
 	Conn   net.Conn
 	Args   []string
-	Source CommandSource
 }
 
 type EventLoop struct {
@@ -42,6 +40,8 @@ type EventLoop struct {
 	LRUSamples   int
 	StartTime    time.Time
 	CommandsSeen int64
+	Role         ServerRole
+	Replicas     []net.Conn
 }
 
 func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
@@ -52,6 +52,7 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *Ev
 		MaxMemory:  maxMemory,
 		LRUSamples: 5, // Redis default
 		StartTime:  time.Now(),
+		Role:       RoleLeader,
 	}
 }
 
@@ -67,11 +68,22 @@ func (l *EventLoop) Start() {
 }
 
 func (l *EventLoop) execute(cmd Command) {
-	if cmd.Source == SourceClient {
-		l.CommandsSeen++
-	}
 	args := cmd.Args
 	conn := cmd.Conn
+
+	
+	l.CommandsSeen++
+	
+
+	if l.Role == RoleReplica {
+		switch strings.ToUpper(args[0]) {
+		case "GET", "INFO", "PING":
+			// allowed
+		default:
+			protocol.WriteError(conn, "READONLY You can't write against a replica")
+			return
+		}
+	}
 
 	if len(args) == 0 {
 		protocol.WriteError(conn, "empty command")
@@ -100,7 +112,7 @@ func (l *EventLoop) execute(cmd Command) {
 		if l.AOF != nil {
 			_ = l.AOF.Append(args)
 		}
-
+		l.propagateToReplicas(args)
 		protocol.WriteSimpleString(conn, "OK")
 
 	case "GET":
@@ -119,6 +131,7 @@ func (l *EventLoop) execute(cmd Command) {
 		}
 
 		if deleted {
+			protocol.WriteInteger(conn, 1)
 			protocol.WriteInteger(conn, 1)
 		} else {
 			protocol.WriteInteger(conn, 0)
@@ -184,6 +197,17 @@ func (l *EventLoop) execute(cmd Command) {
 		default:
 			protocol.WriteError(conn, "unknown subcommand")
 		}
+
+	case "REPLICAOF":
+		if len(args) != 3 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
+		}
+		host := args[1]
+		port := args[2]
+
+		go l.startReplication(host, port)
+		protocol.WriteSimpleString(conn, "OK")
 
 	default:
 		protocol.WriteError(conn, "unknown command")
@@ -316,5 +340,24 @@ func (l *EventLoop) handleConfigSet(conn net.Conn, args []string) {
 
 	default:
 		protocol.WriteError(conn, "unsupported config parameter")
+	}
+}
+
+func (l *EventLoop) applyReplicaCommand(args []string) {
+	switch strings.ToUpper(args[0]) {
+	case "SET":
+		l.Store.Set(args[1], args[2], 0)
+	case "DEL":
+		l.Store.Del(args[1])
+	}
+}
+
+func (l *EventLoop) propagateToReplicas(args []string) {
+	if l.Role != RoleLeader {
+		return
+	}
+
+	for _, r := range l.Replicas {
+		_ = protocol.WriteArray(r, args)
 	}
 }
