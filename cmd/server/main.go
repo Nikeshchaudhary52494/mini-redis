@@ -1,16 +1,22 @@
 package main
 
 import (
+	"fmt"
 	"mini-redis/internal/persistence"
 	"mini-redis/internal/server"
 	"mini-redis/internal/store"
+	"os"
 	"strings"
 )
 
 func main() {
+	fmt.Println("mini-redis PID:", os.Getpid())
 	st := store.NewStore()
 
-	aof, err := persistence.NewAOF("appendonly.aof")
+	aof, err := persistence.NewAOF(
+		"appendonly.aof",
+		persistence.FsyncEverySec,
+	)
 	if err != nil {
 		panic(err)
 	}
