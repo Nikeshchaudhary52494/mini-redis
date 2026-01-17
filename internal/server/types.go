@@ -44,4 +44,7 @@ type EventLoop struct {
 	CommandsSeen int64
 	Role         ServerRole
 	Replicas     []*Replica
+	MasterHost   string
+	MasterPort   string
+	MasterUp     bool
 }

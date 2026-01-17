@@ -16,7 +16,7 @@ func (l *EventLoop) startReplication(host, port string) {
 		return
 	}
 	fmt.Println("replicate: connected to master")
-
+	l.MasterUp = true
 	// Send SYNC
 	fmt.Println("replicate: sending SYNC")
 	_ = protocol.WriteArray(conn, []string{"SYNC"})

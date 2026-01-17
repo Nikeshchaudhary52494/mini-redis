@@ -133,6 +133,9 @@ func (l *EventLoop) execute(cmd Command) {
 		port := args[2]
 
 		l.Role = RoleReplica
+		l.MasterHost = args[1]
+		l.MasterPort = args[2]
+		l.MasterUp = false
 
 		go l.startReplication(host, port)
 		protocol.WriteSimpleString(conn, "OK")
