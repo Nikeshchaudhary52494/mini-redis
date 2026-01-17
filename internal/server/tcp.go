@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"fmt"
+	"mini-redis/internal/protocol"
 	"mini-redis/internal/store"
 	"net"
 	"strconv"
@@ -43,89 +44,96 @@ func (s *TCPServer) Start() error {
 func (s *TCPServer) handleClient(conn net.Conn) {
 	defer conn.Close()
 
-	reader := bufio.NewScanner(conn)
-	writer := bufio.NewWriter(conn)
+	reader := bufio.NewReader(conn)
 
-	writer.WriteString("+OK Mini Redis ready\r\n")
-	writer.Flush()
-
-	for reader.Scan() {
-		line := strings.TrimSpace(reader.Text())
-		if line == "" {
-			continue
+	for {
+		args, err := protocol.ReadCommand(reader)
+		if err != nil {
+			return
 		}
 
-		response := s.executeCommand(line)
-		writer.WriteString(response)
-		writer.Flush()
+		s.executeRESP(conn, args)
 	}
 }
 
-func (s *TCPServer) executeCommand(input string) string {
-	parts := strings.Split(input, " ")
-	cmd := strings.ToUpper(parts[0])
+func (s *TCPServer) executeRESP(conn net.Conn, args []string) {
+	if len(args) == 0 {
+		protocol.WriteError(conn, "empty command")
+		return
+	}
+
+	cmd := strings.ToUpper(args[0])
 
 	switch cmd {
 
 	case "SET":
-		if len(parts) < 3 {
-			return "-ERR wrong number of arguments\r\n"
+		if len(args) < 3 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
 		}
 
 		ttl := time.Duration(0)
-		if len(parts) == 4 {
-			sec, err := strconv.Atoi(parts[3])
+		if len(args) == 5 && strings.ToUpper(args[3]) == "EX" {
+			sec, err := strconv.Atoi(args[4])
 			if err == nil {
 				ttl = time.Duration(sec) * time.Second
 			}
 		}
 
-		s.Store.Set(parts[1], parts[2], ttl)
-		return "+OK\r\n"
+		s.Store.Set(args[1], args[2], ttl)
+		protocol.WriteSimpleString(conn, "OK")
 
 	case "GET":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments\r\n"
+		if len(args) != 2 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
 		}
 
-		val, ok := s.Store.Get(parts[1])
+		val, ok := s.Store.Get(args[1])
 		if !ok {
-			return "$-1\r\n"
+			protocol.WriteBulkString(conn, nil)
+			return
 		}
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(val), val)
+
+		protocol.WriteBulkString(conn, &val)
 
 	case "DEL":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments\r\n"
+		if len(args) != 2 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
 		}
 
-		if s.Store.Del(parts[1]) {
-			return ":1\r\n"
+		if s.Store.Del(args[1]) {
+			protocol.WriteInteger(conn, 1)
+		} else {
+			protocol.WriteInteger(conn, 0)
 		}
-		return ":0\r\n"
 
 	case "EXISTS":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments\r\n"
+		if len(args) != 2 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
 		}
 
-		if s.Store.Exists(parts[1]) {
-			return ":1\r\n"
+		if s.Store.Exists(args[1]) {
+			protocol.WriteInteger(conn, 1)
+		} else {
+			protocol.WriteInteger(conn, 0)
 		}
-		return ":0\r\n"
 
 	case "TTL":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments\r\n"
+		if len(args) != 2 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
 		}
 
-		ttl := s.Store.TTL(parts[1])
-		return fmt.Sprintf(":%d\r\n", int(ttl.Seconds()))
+		ttl := s.Store.TTL(args[1])
+		protocol.WriteInteger(conn, int64(ttl.Seconds()))
 
-	case "QUIT":
-		return "+OK\r\n"
+	case "PING":
+		protocol.WriteSimpleString(conn, "PONG")
 
 	default:
-		return "-ERR unknown command\r\n"
+		protocol.WriteError(conn, "unknown command")
 	}
 }
