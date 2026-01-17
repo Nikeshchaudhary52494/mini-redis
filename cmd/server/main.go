@@ -1,15 +1,18 @@
 package main
 
 import (
-	"mini-redis/internal/server"
-	"mini-redis/internal/store"
+    "mini-redis/internal/server"
+    "mini-redis/internal/store"
 )
 
 func main() {
-	s := store.NewStore()
+    st := store.NewStore()
+    loop := server.NewEventLoop(st)
 
-	tcpServer := server.NewTCPServer(":6379", s)
-	if err := tcpServer.Start(); err != nil {
-		panic(err)
-	}
+    go loop.Start() // 🔥 Redis heart
+
+    tcp := server.NewTCPServer(":6379", loop)
+    if err := tcp.Start(); err != nil {
+        panic(err)
+    }
 }
