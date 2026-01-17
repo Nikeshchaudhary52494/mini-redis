@@ -1,6 +1,10 @@
 package store
 
-import "time"
+import (
+	"fmt"
+	"io"
+	"time"
+)
 
 type Store struct {
 	data map[string]Value
@@ -65,4 +69,14 @@ func (s *Store) TTL(key string) time.Duration {
 		return -2 * time.Second
 	}
 	return ttl
+}
+
+func (s *Store) Snapshot(w io.Writer) error {
+	for key, v := range s.data {
+		if isExpired(v) {
+			continue
+		}
+		fmt.Fprintf(w, "SET %s %s\n", key, v.Data)
+	}
+	return nil
 }

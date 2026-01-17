@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"mini-redis/internal/persistence"
 	"mini-redis/internal/protocol"
 	"mini-redis/internal/store"
@@ -47,10 +48,17 @@ func (l *EventLoop) execute(cmd Command) {
 	switch strings.ToUpper(args[0]) {
 
 	case "SET":
+		if len(args) < 3 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
+		}
+
 		ttl := time.Duration(0)
 		if len(args) == 5 && strings.ToUpper(args[3]) == "EX" {
-			sec, _ := strconv.Atoi(args[4])
-			ttl = time.Duration(sec) * time.Second
+			sec, err := strconv.Atoi(args[4])
+			if err == nil {
+				ttl = time.Duration(sec) * time.Second
+			}
 		}
 
 		l.Store.Set(args[1], args[2], ttl)
@@ -95,6 +103,24 @@ func (l *EventLoop) execute(cmd Command) {
 
 	case "PING":
 		protocol.WriteSimpleString(conn, "PONG")
+
+	case "BGREWRITEAOF":
+		if l.AOF == nil {
+			protocol.WriteError(conn, "AOF is not enabled")
+			return
+		}
+
+		// Snapshot is captured INSIDE event loop (safe)
+		snapshot := func(w io.Writer) error {
+			return l.Store.Snapshot(w)
+		}
+
+		// Rewrite runs in background
+		go func() {
+			_ = l.AOF.Rewrite(snapshot)
+		}()
+
+		protocol.WriteSimpleString(conn, "OK")
 
 	default:
 		protocol.WriteError(conn, "unknown command")
