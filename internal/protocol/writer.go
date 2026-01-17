@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 )
@@ -26,13 +27,12 @@ func WriteInteger(w io.Writer, v int64) {
 }
 
 func WriteArray(w io.Writer, args []string) error {
-	// *<len>\r\n
-	fmt.Fprintf(w, "*%d\r\n", len(args))
+	bw := bufio.NewWriter(w)
 
+	fmt.Fprintf(bw, "*%d\r\n", len(args))
 	for _, arg := range args {
-		// $<len>\r\n<arg>\r\n
-		fmt.Fprintf(w, "$%d\r\n%s\r\n", len(arg), arg)
+		fmt.Fprintf(bw, "$%d\r\n%s\r\n", len(arg), arg)
 	}
 
-	return nil
+	return bw.Flush()
 }

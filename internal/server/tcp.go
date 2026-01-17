@@ -41,7 +41,6 @@ func (s *TCPServer) Start() error {
 func (s *TCPServer) handleClient(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
-	// Read first command
 	args, err := protocol.ReadCommand(reader)
 	if err != nil {
 		conn.Close()
@@ -50,28 +49,30 @@ func (s *TCPServer) handleClient(conn net.Conn) {
 
 	cmd := strings.ToUpper(args[0])
 
-	// 🔥 REPLICA HANDSHAKE (LEADER SIDE)
-	// Replica connects to leader and sends: SYNC
+	// ===== Replica handshake =====
 	if cmd == "SYNC" {
 		fmt.Println("Replica connected:", conn.RemoteAddr())
 
-		// Register replica connection on leader
-		s.Loop.Replicas = append(s.Loop.Replicas, conn)
+		// ❌ TCP handler kuch bhi write nahi karega
 
-		// Do NOT close connection
-		// Leader will only WRITE to this connection
-		select {} // block forever
+		replica := &Replica{
+			Conn: conn,
+			Ch:   make(chan []string, 1024),
+		}
+
+		// 🔥 Replica ko event loop ko handover karo
+		s.Loop.Commands <- Command{
+			Type:    ReplicaRegister,
+			Replica: replica,
+		}
+
+		// TCP goroutine yahin khatam
+		return
 	}
 
-	// 🔹 NORMAL CLIENT PATH
+	// ===== Normal client =====
+	s.Loop.Commands <- Command{Conn: conn, Args: args}
 
-	// Send first command to event loop
-	s.Loop.Commands <- Command{
-		Conn: conn,
-		Args: args,
-	}
-
-	// Keep reading client commands
 	for {
 		args, err := protocol.ReadCommand(reader)
 		if err != nil {
@@ -79,9 +80,6 @@ func (s *TCPServer) handleClient(conn net.Conn) {
 			return
 		}
 
-		s.Loop.Commands <- Command{
-			Conn: conn,
-			Args: args,
-		}
+		s.Loop.Commands <- Command{Conn: conn, Args: args}
 	}
 }

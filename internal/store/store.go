@@ -155,3 +155,16 @@ func (s *Store) EvictLRU(sampleSize int) bool {
 
 	return false
 }
+
+func (s *Store) SnapshotCommands() [][]string {
+	cmds := make([][]string, 0)
+
+	for k, v := range s.data {
+		if isExpired(v) {
+			continue
+		}
+		cmds = append(cmds, []string{"SET", k, v.Data})
+	}
+
+	return cmds
+}

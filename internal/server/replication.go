@@ -5,29 +5,63 @@ import (
 	"fmt"
 	"mini-redis/internal/protocol"
 	"net"
+	"strings"
 )
 
 func (l *EventLoop) startReplication(host, port string) {
-	addr := host + ":" + port
-
-	conn, err := net.Dial("tcp", addr)
+	fmt.Println("replicate: connecting to master at", host+":"+port)
+	conn, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
-		fmt.Println("replication connect failed:", err)
+		fmt.Println("replicate: connection failed:", err)
 		return
 	}
+	fmt.Println("replicate: connected to master")
 
-	// 🔥 send handshake to leader
-	protocol.WriteArray(conn, []string{"SYNC"})
+	// Send SYNC
+	fmt.Println("replicate: sending SYNC")
+	_ = protocol.WriteArray(conn, []string{"SYNC"})
 
 	reader := bufio.NewReader(conn)
 
+	// Expect FULLRESYNC
+	args, err := protocol.ReadCommand(reader)
+	if err != nil {
+		fmt.Println("replicate: error reading command:", err)
+		return
+	}
+	fmt.Println("replicate: received:", strings.Join(args, " "))
+	if strings.ToUpper(args[0]) != "FULLRESYNC" {
+		fmt.Println("replicate: expected FULLRESYNC, got:", args)
+		return
+	}
+	fmt.Println("replicate: received FULLRESYNC, starting snapshot sync")
+
+	// Read snapshot
 	for {
 		args, err := protocol.ReadCommand(reader)
 		if err != nil {
+			fmt.Println("replicate: error reading snapshot command:", err)
 			return
 		}
 
-		// Apply replicated write
+		if strings.ToUpper(args[0]) == "STREAM" {
+			fmt.Println("replicate: finished snapshot sync, starting live stream")
+			break
+		}
+
+		fmt.Println("replicate: applying snapshot command:", strings.Join(args, " "))
+		l.applyReplicaCommand(args)
+	}
+
+	// Live stream
+	for {
+		args, err := protocol.ReadCommand(reader)
+		if err != nil {
+			fmt.Println("replicate: error reading live command:", err)
+			return
+		}
+
+		fmt.Println("replicate: applying live command:", strings.Join(args, " "))
 		l.applyReplicaCommand(args)
 	}
 }

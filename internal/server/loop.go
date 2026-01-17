@@ -17,6 +17,7 @@ type CommandType int
 const (
 	ClientCommand CommandType = iota
 	InternalExpireCommand
+	ReplicaRegister
 )
 
 type ServerRole int
@@ -27,9 +28,15 @@ const (
 )
 
 type Command struct {
-	Type   CommandType
-	Conn   net.Conn
-	Args   []string
+	Type    CommandType
+	Conn    net.Conn
+	Args    []string
+	Replica *Replica
+}
+
+type Replica struct {
+	Conn net.Conn
+	Ch   chan []string
 }
 
 type EventLoop struct {
@@ -41,7 +48,7 @@ type EventLoop struct {
 	StartTime    time.Time
 	CommandsSeen int64
 	Role         ServerRole
-	Replicas     []net.Conn
+	Replicas     []*Replica
 }
 
 func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
@@ -63,7 +70,11 @@ func (l *EventLoop) Start() {
 			l.execute(cmd)
 		case InternalExpireCommand:
 			l.runActiveExpiry()
+		case ReplicaRegister:
+			l.handleReplica(cmd.Replica)
+
 		}
+
 	}
 }
 
@@ -71,13 +82,11 @@ func (l *EventLoop) execute(cmd Command) {
 	args := cmd.Args
 	conn := cmd.Conn
 
-	
 	l.CommandsSeen++
-	
 
 	if l.Role == RoleReplica {
 		switch strings.ToUpper(args[0]) {
-		case "GET", "INFO", "PING":
+		case "GET", "INFO", "PING", "TTL", "EXISTS":
 			// allowed
 		default:
 			protocol.WriteError(conn, "READONLY You can't write against a replica")
@@ -205,6 +214,8 @@ func (l *EventLoop) execute(cmd Command) {
 		}
 		host := args[1]
 		port := args[2]
+
+		l.Role = RoleReplica
 
 		go l.startReplication(host, port)
 		protocol.WriteSimpleString(conn, "OK")
@@ -353,11 +364,46 @@ func (l *EventLoop) applyReplicaCommand(args []string) {
 }
 
 func (l *EventLoop) propagateToReplicas(args []string) {
-	if l.Role != RoleLeader {
-		return
-	}
-
 	for _, r := range l.Replicas {
-		_ = protocol.WriteArray(r, args)
+		select {
+		case r.Ch <- args:
+		default:
+			fmt.Println("replica lagging")
+		}
 	}
+}
+
+func (l *EventLoop) handleReplica(r *Replica) {
+	fmt.Println("[leader] handling new replica connection")
+
+	// 1. Send FULLRESYNC marker
+	fmt.Println("[leader] sending FULLRESYNC")
+	protocol.WriteArray(r.Conn, []string{"FULLRESYNC"})
+	fmt.Println("[leader] sent FULLRESYNC")
+
+	// 2. Send snapshot
+	fmt.Println("[leader] sending snapshot")
+	for _, cmd := range l.Store.SnapshotCommands() {
+		fmt.Println("[leader] sending snapshot command:", strings.Join(cmd, " "))
+		protocol.WriteArray(r.Conn, cmd)
+	}
+	fmt.Println("[leader] sent snapshot")
+
+	// 3. End snapshot
+	fmt.Println("[leader] sending STREAM")
+	protocol.WriteArray(r.Conn, []string{"STREAM"})
+	fmt.Println("[leader] sent STREAM")
+
+	// 4. Register replica for streaming
+	l.Replicas = append(l.Replicas, r)
+	fmt.Println("[leader] registered replica")
+
+	// 5. Start replica writer loop
+	go func() {
+		fmt.Println("[leader] starting writer loop for replica")
+		for args := range r.Ch {
+			protocol.WriteArray(r.Conn, args)
+		}
+		fmt.Println("[leader] writer loop for replica finished")
+	}()
 }
