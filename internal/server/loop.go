@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"mini-redis/internal/persistence"
 	"mini-redis/internal/protocol"
@@ -18,18 +19,29 @@ const (
 	InternalExpireCommand
 )
 
+type CommandSource int
+
+const (
+	SourceClient CommandSource = iota
+	SourceAOFReplay
+	SourceInternal
+)
+
 type Command struct {
-	Type CommandType
-	Conn net.Conn
-	Args []string
+	Type   CommandType
+	Conn   net.Conn
+	Args   []string
+	Source CommandSource
 }
 
 type EventLoop struct {
-	Store      *store.Store
-	Commands   chan Command
-	AOF        *persistence.AOF
-	MaxMemory  int64
-	LRUSamples int
+	Store        *store.Store
+	Commands     chan Command
+	AOF          *persistence.AOF
+	MaxMemory    int64
+	LRUSamples   int
+	StartTime    time.Time
+	CommandsSeen int64
 }
 
 func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
@@ -39,6 +51,7 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *Ev
 		AOF:        aof,
 		MaxMemory:  maxMemory,
 		LRUSamples: 5, // Redis default
+		StartTime:  time.Now(),
 	}
 }
 
@@ -54,6 +67,9 @@ func (l *EventLoop) Start() {
 }
 
 func (l *EventLoop) execute(cmd Command) {
+	if cmd.Source == SourceClient {
+		l.CommandsSeen++
+	}
 	args := cmd.Args
 	conn := cmd.Conn
 
@@ -140,6 +156,35 @@ func (l *EventLoop) execute(cmd Command) {
 
 		protocol.WriteSimpleString(conn, "OK")
 
+	case "INFO":
+		section := "all"
+		if len(args) == 2 {
+			section = strings.ToLower(args[1])
+		}
+
+		info := l.buildInfo(section)
+		protocol.WriteBulkString(conn, &info)
+
+	case "CONFIG":
+		if len(args) < 3 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
+		}
+
+		sub := strings.ToUpper(args[1])
+
+		switch sub {
+
+		case "GET":
+			l.handleConfigGet(conn, args[2:])
+
+		case "SET":
+			l.handleConfigSet(conn, args[2:])
+
+		default:
+			protocol.WriteError(conn, "unknown subcommand")
+		}
+
 	default:
 		protocol.WriteError(conn, "unknown command")
 	}
@@ -180,5 +225,96 @@ func (l *EventLoop) enforceMaxMemory() {
 		if !evicted {
 			break
 		}
+	}
+}
+
+func (l *EventLoop) buildInfo(section string) string {
+	var b strings.Builder
+
+	uptime := int64(time.Since(l.StartTime).Seconds())
+
+	if section == "all" || section == "server" {
+		b.WriteString("# Server\n")
+		b.WriteString("uptime_in_seconds:")
+		b.WriteString(strconv.FormatInt(uptime, 10))
+		b.WriteString("\n\n")
+	}
+
+	if section == "all" || section == "memory" {
+		b.WriteString("# Memory\n")
+		b.WriteString("used_memory:")
+		b.WriteString(strconv.FormatInt(l.Store.ApproxSize(), 10))
+		b.WriteString("\n")
+
+		b.WriteString("maxmemory:")
+		b.WriteString(strconv.FormatInt(l.MaxMemory, 10))
+		b.WriteString("\n\n")
+	}
+
+	if section == "all" || section == "stats" {
+		b.WriteString("# Stats\n")
+		b.WriteString("total_commands_processed:")
+		b.WriteString(strconv.FormatInt(l.CommandsSeen, 10))
+		b.WriteString("\n\n")
+	}
+
+	if section == "all" || section == "persistence" {
+		b.WriteString("# Persistence\n")
+		if l.AOF != nil {
+			b.WriteString("aof_enabled:1\n")
+		} else {
+			b.WriteString("aof_enabled:0\n")
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (l *EventLoop) handleConfigGet(conn net.Conn, args []string) {
+	key := strings.ToLower(args[0])
+
+	var result string
+
+	switch key {
+	case "maxmemory":
+		result = strconv.FormatInt(l.MaxMemory, 10)
+	case "appendfsync":
+		result = l.AOF.PolicyString()
+	default:
+		protocol.WriteBulkString(conn, nil)
+		return
+	}
+
+	// Redis returns array [key, value]
+	resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+		len(key), key,
+		len(result), result,
+	)
+
+	conn.Write([]byte(resp))
+}
+
+func (l *EventLoop) handleConfigSet(conn net.Conn, args []string) {
+	if len(args) != 2 {
+		protocol.WriteError(conn, "wrong number of arguments")
+		return
+	}
+
+	key := strings.ToLower(args[0])
+	val := args[1]
+
+	switch key {
+	case "maxmemory":
+		v, err := strconv.ParseInt(val, 10, 64)
+		if err != nil || v < 0 {
+			protocol.WriteError(conn, "invalid maxmemory value")
+			return
+		}
+		l.MaxMemory = v
+		protocol.WriteSimpleString(conn, "OK")
+
+	default:
+		protocol.WriteError(conn, "unsupported config parameter")
 	}
 }

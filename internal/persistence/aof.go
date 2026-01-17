@@ -27,7 +27,6 @@ type AOF struct {
 	path      string
 }
 
-
 func NewAOF(path string, policy FsyncPolicy) (*AOF, error) {
 	file, err := os.OpenFile(
 		path,
@@ -86,11 +85,10 @@ func (a *AOF) Append(cmd []string) error {
 }
 
 func (a *AOF) Close() error {
-    _ = a.writer.Flush()
-    _ = a.file.Sync()
-    return a.file.Close()
+	_ = a.writer.Flush()
+	_ = a.file.Sync()
+	return a.file.Close()
 }
-
 
 func (a *AOF) Replay(apply func([]string)) error {
 	if _, err := a.file.Seek(0, 0); err != nil {
@@ -107,10 +105,9 @@ func (a *AOF) Replay(apply func([]string)) error {
 	return scanner.Err()
 }
 
-
 func (a *AOF) Rewrite(snapshot func(w io.Writer) error) error {
 	if a.rewriting {
-		return nil 
+		return nil
 	}
 
 	a.rewriting = true
@@ -163,7 +160,6 @@ func (a *AOF) Rewrite(snapshot func(w io.Writer) error) error {
 	return nil
 }
 
-
 func (a *AOF) backgroundFsync() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -175,5 +171,18 @@ func (a *AOF) backgroundFsync() {
 		case <-a.fsyncChan:
 			// coalesced into next tick
 		}
+	}
+}
+
+func (a *AOF) PolicyString() string {
+	switch a.policy {
+	case FsyncAlways:
+		return "always"
+	case FsyncEverySec:
+		return "everysec"
+	case FsyncNo:
+		return "no"
+	default:
+		return "unknown"
 	}
 }
