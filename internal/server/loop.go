@@ -1,6 +1,7 @@
 package server
 
 import (
+	"mini-redis/internal/persistence"
 	"mini-redis/internal/protocol"
 	"mini-redis/internal/store"
 	"net"
@@ -17,12 +18,14 @@ type Command struct {
 type EventLoop struct {
 	Store    *store.Store
 	Commands chan Command
+	AOF      *persistence.AOF
 }
 
-func NewEventLoop(store *store.Store) *EventLoop {
+func NewEventLoop(store *store.Store, aof *persistence.AOF) *EventLoop {
 	return &EventLoop{
 		Store:    store,
 		Commands: make(chan Command, 1024),
+		AOF:      aof,
 	}
 }
 
@@ -49,7 +52,13 @@ func (l *EventLoop) execute(cmd Command) {
 			sec, _ := strconv.Atoi(args[4])
 			ttl = time.Duration(sec) * time.Second
 		}
+
 		l.Store.Set(args[1], args[2], ttl)
+
+		if l.AOF != nil {
+			_ = l.AOF.Append(args)
+		}
+
 		protocol.WriteSimpleString(conn, "OK")
 
 	case "GET":
@@ -61,7 +70,13 @@ func (l *EventLoop) execute(cmd Command) {
 		protocol.WriteBulkString(conn, &val)
 
 	case "DEL":
-		if l.Store.Del(args[1]) {
+		deleted := l.Store.Del(args[1])
+
+		if deleted && l.AOF != nil {
+			_ = l.AOF.Append(args)
+		}
+
+		if deleted {
 			protocol.WriteInteger(conn, 1)
 		} else {
 			protocol.WriteInteger(conn, 0)

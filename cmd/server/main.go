@@ -1,18 +1,36 @@
 package main
 
 import (
-    "mini-redis/internal/server"
-    "mini-redis/internal/store"
+	"mini-redis/internal/persistence"
+	"mini-redis/internal/server"
+	"mini-redis/internal/store"
+	"strings"
 )
 
 func main() {
-    st := store.NewStore()
-    loop := server.NewEventLoop(st)
+	st := store.NewStore()
 
-    go loop.Start() // 🔥 Redis heart
+	aof, err := persistence.NewAOF("appendonly.aof")
+	if err != nil {
+		panic(err)
+	}
 
-    tcp := server.NewTCPServer(":6379", loop)
-    if err := tcp.Start(); err != nil {
-        panic(err)
-    }
+	// Replay persisted commands
+	_ = aof.Replay(func(cmd []string) {
+		// Apply without writing again
+		switch strings.ToUpper(cmd[0]) {
+		case "SET":
+			st.Set(cmd[1], cmd[2], 0)
+		case "DEL":
+			st.Del(cmd[1])
+		}
+	})
+
+	loop := server.NewEventLoop(st, aof)
+	go loop.Start()
+
+	tcp := server.NewTCPServer(":6379", loop)
+	if err := tcp.Start(); err != nil {
+		panic(err)
+	}
 }
