@@ -11,7 +11,15 @@ import (
 	"time"
 )
 
+type CommandType int
+
+const (
+	ClientCommand CommandType = iota
+	InternalExpireCommand
+)
+
 type Command struct {
+	Type CommandType
 	Conn net.Conn
 	Args []string
 }
@@ -32,7 +40,12 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF) *EventLoop {
 
 func (l *EventLoop) Start() {
 	for cmd := range l.Commands {
-		l.execute(cmd)
+		switch cmd.Type {
+		case ClientCommand:
+			l.execute(cmd)
+		case InternalExpireCommand:
+			l.runActiveExpiry()
+		}
 	}
 }
 
@@ -125,4 +138,33 @@ func (l *EventLoop) execute(cmd Command) {
 	default:
 		protocol.WriteError(conn, "unknown command")
 	}
+}
+
+func (l *EventLoop) runActiveExpiry() {
+	const sampleSize = 20
+	const maxDeletes = 25
+
+	keys := l.Store.RandomKeysWithTTL(sampleSize)
+	deleted := 0
+
+	for _, key := range keys {
+		if l.Store.DeleteIfExpired(key) {
+			deleted++
+			if deleted >= maxDeletes {
+				break
+			}
+		}
+	}
+}
+
+func StartExpiryTicker(loop *EventLoop) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+
+	go func() {
+		for range ticker.C {
+			loop.Commands <- Command{
+				Type: InternalExpireCommand,
+			}
+		}
+	}()
 }

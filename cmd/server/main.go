@@ -34,7 +34,7 @@ func main() {
 
 	loop := server.NewEventLoop(st, aof)
 	go loop.Start()
-
+	server.StartExpiryTicker(loop)
 	tcp := server.NewTCPServer(":6379", loop)
 	if err := tcp.Start(); err != nil {
 		panic(err)

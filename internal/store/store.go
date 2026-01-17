@@ -80,3 +80,29 @@ func (s *Store) Snapshot(w io.Writer) error {
 	}
 	return nil
 }
+
+func (s *Store) RandomKeysWithTTL(limit int) []string {
+	keys := make([]string, 0, limit)
+
+	for k, v := range s.data {
+		if !v.Expiry.IsZero() {
+			keys = append(keys, k)
+			if len(keys) >= limit {
+				break
+			}
+		}
+	}
+	return keys
+}
+
+func (s *Store) DeleteIfExpired(key string) bool {
+	v, ok := s.data[key]
+	if !ok {
+		return false
+	}
+	if isExpired(v) {
+		delete(s.data, key)
+		return true
+	}
+	return false
+}
