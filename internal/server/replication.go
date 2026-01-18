@@ -5,69 +5,60 @@ import (
 	"fmt"
 	"mini-redis/internal/protocol"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func (l *EventLoop) startReplication(host, port string) {
-	fmt.Println("replicate: connecting to master at", host+":"+port)
 	conn, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
-		fmt.Println("replicate: connection failed:", err)
+		fmt.Println("[replica] failed to connect to master")
+		l.MasterUp = false
+		go l.scheduleAutoPromote()
 		return
 	}
-	fmt.Println("replicate: connected to master")
-	l.MasterUp = true
-	// Send SYNC
-	fmt.Println("replicate: sending SYNC")
-	_ = protocol.WriteArray(conn, []string{"SYNC"})
 
+	l.MasterUp = true
+
+	protocol.WriteArray(conn, []string{"SYNC"})
 	reader := bufio.NewReader(conn)
 
-	// Expect FULLRESYNC
+	// FULLRESYNC
 	args, err := protocol.ReadCommand(reader)
-	if err != nil {
-		fmt.Println("replicate: error reading command:", err)
+	if err != nil || strings.ToUpper(args[0]) != "FULLRESYNC" {
+		l.MasterUp = false
+		go l.scheduleAutoPromote()
 		return
 	}
-	fmt.Println("replicate: received:", strings.Join(args, " "))
-	if strings.ToUpper(args[0]) != "FULLRESYNC" {
-		fmt.Println("replicate: expected FULLRESYNC, got:", args)
-		return
-	}
-	fmt.Println("replicate: received FULLRESYNC, starting snapshot sync")
 
-	// Read snapshot
+	// Snapshot
 	for {
 		args, err := protocol.ReadCommand(reader)
 		if err != nil {
-			fmt.Println("replicate: error reading snapshot command:", err)
+			l.handleMasterDown()
 			return
 		}
-
 		if strings.ToUpper(args[0]) == "STREAM" {
-			fmt.Println("replicate: finished snapshot sync, starting live stream")
 			break
 		}
-
-		fmt.Println("replicate: applying snapshot command:", strings.Join(args, " "))
 		l.applyReplicaCommand(args)
 	}
 
-	// Live stream
+	// Streaming
 	for {
 		select {
 		case <-l.StopReplication:
-			fmt.Println("[replica] replication stopped")
 			return
 		default:
 			args, err := protocol.ReadCommand(reader)
 			if err != nil {
+				l.handleMasterDown()
 				return
 			}
 			l.applyReplicaCommand(args)
 		}
 	}
-
 }
 
 func (l *EventLoop) handleReplica(r *Replica) {
@@ -92,8 +83,13 @@ func (l *EventLoop) handleReplica(r *Replica) {
 
 func (l *EventLoop) propagateToReplicas(args []string) {
 	for _, r := range l.Replicas {
+		cmd := append([]string{
+			"REPL",
+			strconv.FormatInt(l.CurrentEpoch, 10),
+		}, args...)
+
 		select {
-		case r.Ch <- args:
+		case r.Ch <- cmd:
 		default:
 			fmt.Println("replica lagging")
 		}
@@ -101,29 +97,75 @@ func (l *EventLoop) propagateToReplicas(args []string) {
 }
 
 func (l *EventLoop) applyReplicaCommand(args []string) {
-	switch strings.ToUpper(args[0]) {
+	if args[0] != "REPL" {
+		return
+	}
+
+	epoch, _ := strconv.ParseInt(args[1], 10, 64)
+
+	// Reject stale leader
+	if epoch < l.MasterEpoch {
+		fmt.Println("[replica] stale epoch ignored:", epoch)
+		return
+	}
+
+	// Accept new leader epoch
+	l.MasterEpoch = epoch
+
+	switch strings.ToUpper(args[2]) {
 	case "SET":
-		l.Store.Set(args[1], args[2], 0)
+		l.Store.Set(args[3], args[4], 0)
 	case "DEL":
-		l.Store.Del(args[1])
+		l.Store.Del(args[3])
 	}
 }
 
 func (l *EventLoop) promoteToLeader() {
-	fmt.Println("[failover] promoting replica to leader")
+	if l.Role != RoleReplica {
+		return
+	}
 
-	// Change role
+	fmt.Println("[failover] auto-promoting replica to leader")
+
+	l.CurrentEpoch = max(l.CurrentEpoch, l.MasterEpoch) + 1
+	l.MasterEpoch = 0
 	l.Role = RoleLeader
-
-	// Clear master info
 	l.MasterHost = ""
 	l.MasterPort = ""
 	l.MasterUp = false
 
-	// Stop replication stream
 	close(l.StopReplication)
-	// (simplest: rely on connection close)
-	// More advanced: use context / channel close
 
 	fmt.Println("[failover] promotion complete")
+}
+
+func (l *EventLoop) handleMasterDown() {
+	if !l.MasterUp {
+		return // already handled
+	}
+
+	fmt.Println("[replica] master link down")
+
+	l.MasterUp = false
+
+	go l.scheduleAutoPromote()
+}
+
+func (l *EventLoop) scheduleAutoPromote() {
+	// only replicas can auto-promote
+	if l.Role != RoleReplica {
+		return
+	}
+
+	fmt.Println("[failover] scheduling auto-promotion")
+
+	time.Sleep(3 * time.Second)
+
+	// Check again (maybe master came back)
+	if l.MasterUp {
+		fmt.Println("[failover] master recovered, aborting promotion")
+		return
+	}
+
+	l.promoteToLeader()
 }

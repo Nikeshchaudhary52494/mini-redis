@@ -8,14 +8,16 @@ import (
 
 func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
 	return &EventLoop{
-		Store:      store,
-		Commands:   make(chan Command, 1024),
-		AOF:        aof,
-		MaxMemory:  maxMemory,
-		LRUSamples: 5,
-		StartTime:  time.Now(),
-		Role:       RoleLeader,
+		Store:           store,
+		Commands:        make(chan Command, 1024),
+		AOF:             aof,
+		MaxMemory:       maxMemory,
+		LRUSamples:      5,
+		StartTime:       time.Now(),
+		Role:            RoleLeader,
 		StopReplication: make(chan struct{}),
+		CurrentEpoch:    1,
+		MasterEpoch:     0,
 	}
 }
 
