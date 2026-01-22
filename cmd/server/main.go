@@ -44,7 +44,12 @@ func main() {
 
 	const maxMemory = 1024 * 1024 // 1MB
 	loop := server.NewEventLoop(st, aof, maxMemory)
-	loop.NodeID = addr
+	
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "localhost"
+	}
+	loop.NodeID = fmt.Sprintf("%s:%d", hostname, *port)
 
 	if *peers != "" {
 		loop.Peers = strings.Split(*peers, ",")

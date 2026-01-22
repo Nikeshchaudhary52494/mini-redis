@@ -11,21 +11,33 @@ import (
 var ErrInvalidRESP = errors.New("invalid RESP format")
 
 func ReadCommand(r *bufio.Reader) ([]string, error) {
+	// Peek first byte to check for RESP array
+	b, err := r.Peek(1)
+	if err != nil {
+		return nil, err
+	}
+
+	// Inline command (e.g., "PING", "INFO replication")
+	if b[0] != '*' {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			return nil, ErrInvalidRESP
+		}
+		return strings.Fields(line), nil
+	}
+
+	// RESP Array
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, err
     }
 
 	line = strings.TrimSpace(line)
-	if len(line) == 0 {
-		return nil, ErrInvalidRESP
-	}
-
-	// Must start with *
-	if line[0] != '*' {
-		return nil, ErrInvalidRESP
-	}
-
+	// We already checked b[0] == '*', but standard parsing continues:
 	count, err := strconv.Atoi(line[1:])
 	if err != nil {
 		return nil, ErrInvalidRESP
@@ -41,7 +53,7 @@ func ReadCommand(r *bufio.Reader) ([]string, error) {
 		}
 
 		lenLine = strings.TrimSpace(lenLine)
-		if lenLine[0] != '$' {
+		if len(lenLine) == 0 || lenLine[0] != '$' {
 			return nil, ErrInvalidRESP
 		}
 
