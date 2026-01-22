@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+// Store is the primary in-memory data structure.
+// It uses a simple Go map but logic in the methods handles TTL and Expiry.
 type Store struct {
 	data map[string]Value
 }
@@ -16,6 +18,7 @@ func NewStore() *Store {
 	}
 }
 
+// Set stores a key-value pair with an optional TTL.
 func (s *Store) Set(key, value string, ttl time.Duration) {
 	v := Value{
 		Type:       StringType,
@@ -30,6 +33,7 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 	s.data[key] = v
 }
 
+// Get retrieves a value, automatically handling transparent expiry deletion.
 func (s *Store) Get(key string) (string, bool) {
 	v, ok := s.data[key]
 	if !ok || isExpired(v) {
@@ -74,6 +78,7 @@ func (s *Store) TTL(key string) time.Duration {
 	return ttl
 }
 
+// Snapshot writes the current state of the store to a writer (for AOF rewrite).
 func (s *Store) Snapshot(w io.Writer) error {
 	for key, v := range s.data {
 		if isExpired(v) {

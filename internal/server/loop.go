@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// NewEventLoop initializes the server engine with storage, persistence, and memory limits.
 func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *EventLoop {
 	return &EventLoop{
 		Store:           store,
@@ -22,6 +23,9 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *Ev
 	}
 }
 
+// Start runs the main event loop. This blocks indefinitely.
+// It processes incoming commands, timer ticks (for expiry/election), and internal signals sequentially.
+// This single-threaded approach (like Redis) avoids mutexes for data access.
 func (l *EventLoop) Start() {
 	if l.Role == RoleReplica && l.MasterHost == "" {
 		go l.scheduleAutoPromote()

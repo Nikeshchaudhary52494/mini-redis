@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// CommandType represents the internal event type processed by the event loop.
 type CommandType int
 
 const (
@@ -17,14 +18,20 @@ const (
 	StartElectionCommand
 )
 
+// ServerRole defines the node's state in the Raft-like consensus algorithm.
 type ServerRole int
 
 const (
+	// RoleLeader handles all writes and replicates to followers.
 	RoleLeader ServerRole = iota
+	// RoleReplica follows a leader and serves read-only traffic.
 	RoleReplica
+	// RoleCandidate is a temporary state during leader election.
 	RoleCandidate
 )
 
+// Command is a unified structure for all events (network, timer, internal)
+// passed into the single-threaded event loop.
 type Command struct {
 	Type        CommandType
 	Conn        net.Conn
@@ -35,11 +42,14 @@ type Command struct {
 	VoteGranted bool
 }
 
+// Replica represents a connection to a follower node.
 type Replica struct {
 	Conn net.Conn
-	Ch   chan []string
+	Ch   chan []string // Channel to buffer commands for asynchronous replication
 }
 
+// EventLoop is the core single-threaded engine that manages state,
+// executes commands, and handles distributed consensus.
 type EventLoop struct {
 	Store           *store.Store
 	Commands        chan Command
@@ -48,17 +58,20 @@ type EventLoop struct {
 	LRUSamples      int
 	StartTime       time.Time
 	CommandsSeen    int64
+	
+	// Distributed System State
 	Role            ServerRole
 	Replicas        []*Replica
 	MasterHost      string
 	MasterPort      string
 	MasterUp        bool
 	StopReplication chan struct{}
-	CurrentEpoch    int64 // my epoch if leader
-	MasterEpoch     int64 // leader epoch I follow (if replica)
+	CurrentEpoch    int64 // Current term (Raft term)
+	MasterEpoch     int64 // The term of the leader we are following
 	NodeID          string
-	Peers           []string
-	VotedEpoch      int64
+	Peers           []string // List of other nodes in the cluster
+	
+	// Election State
 	VotedFor        string
 	VotesReceived   int
 	ElectionStartTime time.Time

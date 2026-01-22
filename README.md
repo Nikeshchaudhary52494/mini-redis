@@ -1,237 +1,187 @@
-Awesome 👍
-# 🧠 Mini-Redis (Redis-like In-Memory Data Store in Go)
+# 🧠 Mini-Redis (Distributed In-Memory Store)
 
-A Redis-inspired **in-memory key–value store** written in Go, built from scratch to understand **systems internals, replication, failover, and distributed coordination**.
+A high-performance, distributed **key-value store** written in Go, compatible with the Redis RESP protocol. This project implements core distributed systems concepts including **Leader-Follower Replication**, **Automatic Failover (Raft-lite)**, **AOF Persistence**, and a **Smart Client** for topology-aware routing.
 
-This project intentionally focuses on **core Redis mechanics** rather than feature completeness.
-
----
-
-## ✨ Features
-
-### Core
-
-* RESP protocol compatible (`redis-cli` works)
-* In-memory key–value store
-* Single-threaded event loop (Redis-style)
-* TTL support with active expiry
-* LRU eviction with `maxmemory`
-
-### Persistence
-
-* Append-Only File (AOF)
-* Configurable fsync policy
-* AOF replay on startup
-* Background AOF rewrite (`BGREWRITEAOF`)
-
-### Replication & Availability
-
-* Leader–replica replication
-* FULLRESYNC + streaming replication
-* Read-only replicas
-* Automatic failover
-* Epoch-based fencing (split-brain prevention)
-* Quorum-based leader election
-* Old leader reattachment as replica
-
-### Observability
-
-* `INFO server`
-* `INFO memory`
-* `INFO persistence`
-* `INFO replication`
-* `CONFIG GET / SET`
+It is designed to be a learning resource for understanding how distributed databases work under the hood.
 
 ---
 
-## 🏗️ Architecture Overview
+## ✨ Key Features
+
+### 🚀 Core Engine
+
+- **RESP Protocol Compatible**: Works with standard `redis-cli` and Redis libraries.
+- **In-Memory Storage**: Fast key-value operations.
+- **TTL Support**: Keys expire automatically after a set time.
+- **LRU Eviction**: Automatically removes old keys when memory limit is reached.
+
+### 🛡️ Distributed Architecture
+
+- **Replication**: One Leader (Writes) + Multiple Replicas (Reads).
+- **Automatic Failover**: If the Leader crashes, the cluster detects it and elects a new Leader automatically using a quorum-based election (similar to Raft).
+- **Split-Brain Protection**: Uses Epoch (Term) numbers to reject stale leaders.
+
+### 💾 Persistence
+
+- **AOF (Append-Only File)**: Durability ensures data isn't lost on restart.
+- **Background Rewrite**: `BGREWRITEAOF` compacts logs without blocking the main thread.
+
+### 🧠 Smart Client
+
+- **Topology Discovery**: Automatically finds the Leader and Replicas.
+- **Read/Write Splitting**: Routes `SET` commands to the Leader and `GET` commands to Replicas (Round-Robin).
+- **Auto-Retry**: Seamlessly handles failovers with automatic retries, providing near-zero downtime to the application.
+
+---
+
+## 🏗️ Architecture
+
+The system runs as a cluster of nodes. An external load balancer (HAProxy) is provided for legacy clients, while modern applications use the Smart Client.
 
 ```
-           Clients (redis-cli / app)
-                    |
-                    v
-           ┌───────────────────┐
-           │     Leader Node   │
-           │  (writes enabled) │
-           └───────┬───────────┘
+                               ┌─────────────────┐
+                               │  Application    │
+                               │ (Smart Client)  │
+                               └────────┬────────┘
+                   ┌────────────────────┼────────────────────┐
+                   │                    │                    │
+          ┌────────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
+          │  Redis Node 1   │  │  Redis Node 2   │  │  Redis Node 3   │
+          │    (Leader)     │◄─┤    (Replica)    │◄─┤    (Replica)    │
+          └─────────────────┘  └─────────────────┘  └─────────────────┘
+                   ▲
                    │
-        ┌──────────┴──────────┐
-        │                     │
-┌───────────────┐   ┌───────────────┐
-│   Replica A   │   │   Replica B   │
-│ (read-only)   │   │ (read-only)   │
-└───────────────┘   └───────────────┘
+           ┌───────┴───────┐
+           │    HAProxy    │◄─── Standard redis-cli
+           └───────────────┘
 ```
-
-* Replicas automatically promote on leader failure
-* Elections are **replica-only**
-* Highest epoch always wins
-* Static membership (configured at startup)
 
 ---
 
 ## 🚀 Getting Started
 
+The easiest way to run the cluster is using **Docker Compose**. This spins up 3 Redis nodes, an HAProxy load balancer, and an example client application.
+
 ### Prerequisites
 
-* Go 1.20+
-* `redis-cli` installed
+- Docker & Docker Compose
+- `redis-cli` (optional, for manual testing)
 
----
-
-## 🧩 Running the System (1 Leader + 2 Replicas)
-
-### Leader
+### 1. Start the Cluster
 
 ```bash
-go run main.go \
-  --port=6379 \
-  --node-id=node-6379 \
-  --peers=127.0.0.1:6380,127.0.0.1:6381
+docker-compose up --build
 ```
 
-### Replica A
+You will see logs from 3 redis nodes, haproxy, and the example client.
 
-```bash
-go run main.go \
-  --port=6380 \
-  --node-id=node-6380 \
-  --peers=127.0.0.1:6381
-```
+### 2. Connect Manually (via CLI)
 
-### Replica B
-
-```bash
-go run main.go \
-  --port=6381 \
-  --node-id=node-6381 \
-  --peers=127.0.0.1:6380
-```
-
-> **Peers = same replication group replicas (leader excluded)**
-
----
-
-## 🔌 Connecting with redis-cli
+You can connect to the cluster using the standard Redis CLI through the HAProxy load balancer on port **6379**.
 
 ```bash
 redis-cli -p 6379
 ```
 
-Example:
+Try running commands:
 
 ```bash
-SET name nikesh
-GET name
-TTL name
+SET mykey "Hello Distributed World"
+GET mykey
 INFO replication
 ```
 
+### 3. Smart Client Demo
+
+The `client-app` service in Docker demonstrates the Go Smart Client. It connects to the cluster, performs writes to the leader, and reads from replicas. Check the docker logs:
+
+```
+client-app_1  | Initializing Smart Client...
+client-app_1  | Connected! Starting workload...
+client-app_1  | [WRITE] SET framework mini-redis-client
+client-app_1  | [READ] GET framework = mini-redis-client
+```
+
 ---
 
-## 🔁 Failover Demo
+## 🎮 Testing Failover
 
-1. Kill the leader (`Ctrl+C`)
-2. Replicas detect leader failure
-3. Quorum election starts
-4. One replica promotes to leader
-5. Writes continue on new leader
+You can simulate a crash to see the system recover automatically.
+
+1.  **Check who is the leader**:
+
+    ```bash
+    redis-cli -p 6379 INFO replication
+    # Output: role:leader (and check the container logs to see which node this is, e.g., redis-1)
+    ```
+
+2.  **Kill the Leader**:
+    Stop the container corresponding to the leader (e.g., `redis-1`).
+
+    ```bash
+    docker-compose stop redis-1
+    ```
+
+3.  **Watch the Election**:
+    Observe the logs of the other nodes (`redis-2`, `redis-3`).
+    - They will detect the master is down.
+    - Start an election.
+    - One will become the new Leader.
+
+4.  **Verify Client Recovery**:
+    - **HAProxy**: Will automatically switch traffic to the new leader after a brief check interval.
+    - **Smart Client**: Will catch the connection error, refresh its topology map, and retry the operation against the new leader automatically.
+
+---
+
+## 📜 Supported Commands
+
+| Command  | Usage                        | Description                                   |
+| :------- | :--------------------------- | :-------------------------------------------- |
+| `SET`    | `SET key value [EX seconds]` | Set a key with optional TTL.                  |
+| `GET`    | `GET key`                    | Get the value of a key.                       |
+| `DEL`    | `DEL key`                    | Delete a key.                                 |
+| `TTL`    | `TTL key`                    | Get remaining time to live (in seconds).      |
+| `EXISTS` | `EXISTS key`                 | Check if a key exists (1) or not (0).         |
+| `PING`   | `PING`                       | Returns PONG.                                 |
+| `INFO`   | `INFO [section]`             | Get server info (replication, memory, stats). |
+| `CONFIG` | `CONFIG GET/SET param`       | Get or set configuration (e.g., maxmemory).   |
+
+---
+
+## 💻 Development (Running Locally)
+
+If you want to run without Docker (e.g., for development), you can start nodes manually.
+
+**1. Build:**
 
 ```bash
-INFO replication
+go build -o mini-redis cmd/server/main.go
 ```
 
-Example output:
-
-```
-# Replication
-role:leader
-connected_replicas:1
-```
-
----
-
-## 📦 Persistence
-
-### Append-Only File (AOF)
-
-* Every write command is appended
-* Replay on startup restores state
-* Separate AOF per node
-
-### Rewrite
+**2. Start Leader (Port 6379):**
 
 ```bash
-BGREWRITEAOF
+./mini-redis -port 6379 -peers "localhost:6380,localhost:6381"
 ```
 
----
-
-## 🧠 Configuration
-
-### Max Memory
+**3. Start Replicas:**
 
 ```bash
-CONFIG SET maxmemory 1048576
+./mini-redis -port 6380 -peers "localhost:6381"
+./mini-redis -port 6381 -peers "localhost:6380"
 ```
 
-### Read Config
-
-```bash
-CONFIG GET maxmemory
-```
+_(Note: Replicas will auto-discover the leader via the peers list or need `REPLICAOF` command manually if not using the discovery logic)._
 
 ---
 
-## 📊 INFO Sections
-
-```bash
-INFO
-INFO server
-INFO memory
-INFO persistence
-INFO replication
-```
-
 ---
 
-## ⚠️ Design Decisions & Trade-offs
+Summary:
 
-### Why static membership?
-
-* Simpler
-* Safer elections
-* Matches Redis Sentinel philosophy
-* Dynamic membership adds major complexity
-
-### Why no clustering?
-
-* Single leader + replicas cover most real-world use cases
-* Avoids unnecessary complexity
-* Sharding is optional, not required
-
----
-
-## ❌ What This Is NOT
-
-* ❌ Redis Cluster
-* ❌ Strongly consistent database
-* ❌ Multi-region datastore
-* ❌ Production Redis replacement
-
-This project is about **learning and demonstrating systems design**, not competing with Redis.
-
----
-
-## 🧠 What This Project Demonstrates
-
-* Event-loop based server design
-* Persistence internals
-* Replication protocols
-* Failover mechanics
-* Epoch-based fencing
-* Quorum consensus basics
-* Trade-offs in distributed systems
+- redis-cli -> HAProxy -> Leader (Writes & Reads)
+- client-app (Smart Client) -> Leader (Writes) / Replicas (Reads)
 
 ---
 
@@ -240,22 +190,16 @@ This project is about **learning and demonstrating systems design**, not competi
 ```
 mini-redis/
 ├── cmd/
-│   └── server/
-│       └── main.go
+│   ├── server/          # Main entry point for the Server
+│   └── example-client/  # Demo application using the Smart Client
 ├── internal/
-│   ├── server/       # TCP server, event loop, replication, election
-│   ├── store/        # In-memory store, TTL, LRU
-│   ├── persistence/  # AOF, rewrite, fsync
-│   └── protocol/     # RESP parser & writer
-└── README.md
+│   ├── server/          # Core logic: Event loop, Replication, Election, TCP
+│   ├── store/           # In-memory data structures (Map, TTL, LRU)
+│   ├── persistence/     # AOF file handling
+│   └── protocol/        # RESP parser & writer
+├── client/              # 📦 Go Smart Client Library
+├── docker-compose.yml   # Cluster orchestration
+├── Dockerfile           # Server container definition
+├── Dockerfile.client    # Client container definition
+└── haproxy.cfg          # Load Balancer configuration
 ```
-
----
-
-## 🧪 Use Cases
-
-* Cache layer
-* Session store
-* Rate limiting
-* Feature flags
-* Learning distributed systems

@@ -9,12 +9,16 @@ import (
 	"time"
 )
 
+// execute is the command dispatcher. It is called exclusively by the main event loop,
+// ensuring thread-safe access to the underlying Store without mutexes.
 func (l *EventLoop) execute(cmd Command) {
 	args := cmd.Args
 	conn := cmd.Conn
 
 	l.CommandsSeen++
 
+	// Enforce Read-Only mode if the node is currently a Replica.
+	// Only safe discovery/read commands are permitted.
 	if l.Role == RoleReplica {
 		switch strings.ToUpper(args[0]) {
 		case "GET", "INFO", "PING", "TTL", "EXISTS", "PROMOTE", "HEARTBEAT", "REQUEST_VOTE", "REPLICAOF", "CONFIG":

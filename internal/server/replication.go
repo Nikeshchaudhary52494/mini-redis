@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// startReplication initiates the handshake with a Master node.
+// It performs a FULLRESYNC to get the current state and then enters streaming mode
+// to receive live updates.
 func (l *EventLoop) startReplication(host, port string) {
 	conn, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
@@ -139,6 +142,8 @@ func (l *EventLoop) applyReplicaCommand(args []string) {
 	}
 }
 
+// promoteToLeader transitions the node from Replica/Candidate to Leader.
+// It stops any existing replication links and begins broadcasting heartbeats.
 func (l *EventLoop) promoteToLeader() {
 	if l.Role == RoleLeader {
 		return
@@ -233,6 +238,8 @@ func (l *EventLoop) checkPeerLeader(peer string) bool {
 	return strings.Contains(val, "role:leader")
 }
 
+// startElection kicks off a new round of voting to become the cluster Leader.
+// It increments the Epoch (Term) to ensure it can override any stale leaders.
 func (l *EventLoop) startElection() {
 	l.Role = RoleCandidate
 	l.CurrentEpoch++
