@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"fmt"
+	"math/rand"
 	"mini-redis/internal/protocol"
 	"net"
 	"strconv"
@@ -159,7 +160,9 @@ func (l *EventLoop) scheduleAutoPromote() {
 
 	fmt.Println("[failover] scheduling auto-promotion")
 
-	time.Sleep(3 * time.Second)
+	// Randomized sleep to avoid split vote/promotion
+	randSleep := time.Duration(rand.Intn(1000)) * time.Millisecond
+	time.Sleep(3*time.Second + randSleep)
 
 	// Check again (maybe master came back)
 	if l.MasterUp {
@@ -167,5 +170,41 @@ func (l *EventLoop) scheduleAutoPromote() {
 		return
 	}
 
+	// Check peers if any of them is already leader
+	for _, peer := range l.Peers {
+		if l.checkPeerLeader(peer) {
+			fmt.Println("[failover] found new leader, following", peer)
+			parts := strings.Split(peer, ":")
+			if len(parts) != 2 {
+				continue
+			}
+			// Switch to replica of new leader
+			l.MasterHost = parts[0]
+			l.MasterPort = parts[1]
+			l.MasterUp = false
+			go l.startReplication(l.MasterHost, l.MasterPort)
+			return
+		}
+	}
+
 	l.promoteToLeader()
+}
+
+func (l *EventLoop) checkPeerLeader(peer string) bool {
+	conn, err := net.DialTimeout("tcp", peer, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	// Send INFO replication
+	protocol.WriteArray(conn, []string{"INFO", "replication"})
+
+	reader := bufio.NewReader(conn)
+	val, err := protocol.ReadBulkString(reader)
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(val, "role:leader")
 }

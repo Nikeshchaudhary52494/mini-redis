@@ -13,6 +13,7 @@ import (
 func main() {
 	// 🔥 Read port from CLI
 	port := flag.Int("port", 6379, "port to run server on")
+	peers := flag.String("peers", "", "comma-separated list of peer addresses")
 	flag.Parse()
 
 	addr := fmt.Sprintf(":%d", *port)
@@ -43,6 +44,10 @@ func main() {
 
 	const maxMemory = 1024 * 1024 // 1MB
 	loop := server.NewEventLoop(st, aof, maxMemory)
+
+	if *peers != "" {
+		loop.Peers = strings.Split(*peers, ",")
+	}
 
 	go loop.Start()
 	server.StartExpiryTicker(loop)

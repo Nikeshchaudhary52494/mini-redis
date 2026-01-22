@@ -50,4 +50,8 @@ type EventLoop struct {
 	StopReplication chan struct{}
 	CurrentEpoch    int64 // my epoch if leader
 	MasterEpoch     int64 // leader epoch I follow (if replica)
+	NodeID          string
+	Peers           []string
+	VotedEpoch      int64
+	VotedFor        string
 }
