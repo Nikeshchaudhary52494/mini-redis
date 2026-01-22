@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"mini-redis/internal/protocol"
 	"strconv"
@@ -16,7 +17,7 @@ func (l *EventLoop) execute(cmd Command) {
 
 	if l.Role == RoleReplica {
 		switch strings.ToUpper(args[0]) {
-		case "GET", "INFO", "PING", "TTL", "EXISTS", "PROMOTE":
+		case "GET", "INFO", "PING", "TTL", "EXISTS", "PROMOTE", "HEARTBEAT", "REQUEST_VOTE", "REPLICAOF", "CONFIG":
 			// allowed
 		default:
 			protocol.WriteError(conn, "READONLY You can't write against a replica")
@@ -148,6 +149,91 @@ func (l *EventLoop) execute(cmd Command) {
 
 		l.promoteToLeader()
 		protocol.WriteSimpleString(conn, "OK")
+
+	case "REQUEST_VOTE":
+		if len(args) != 3 {
+			protocol.WriteError(conn, "wrong number of arguments")
+			return
+		}
+
+		term, _ := strconv.ParseInt(args[1], 10, 64)
+		candidateID := args[2]
+
+		// If term > current, update and step down
+		if term > l.CurrentEpoch {
+			l.CurrentEpoch = term
+			l.Role = RoleReplica
+			l.VotedFor = ""
+			l.MasterHost = "" // Reset master if we step down due to higher term
+			l.MasterUp = false
+		}
+
+		// Reject if term < current
+		if term < l.CurrentEpoch {
+			protocol.WriteArray(conn, []string{"VOTE", "NO", strconv.FormatInt(l.CurrentEpoch, 10)})
+			return
+		}
+
+		// Grant vote if not voted or voted for this candidate
+		if l.VotedFor == "" || l.VotedFor == candidateID {
+			l.VotedFor = candidateID
+			protocol.WriteArray(conn, []string{"VOTE", "YES", strconv.FormatInt(l.CurrentEpoch, 10)})
+		} else {
+			protocol.WriteArray(conn, []string{"VOTE", "NO", strconv.FormatInt(l.CurrentEpoch, 10)})
+		}
+
+	case "HEARTBEAT":
+		// args: [HEARTBEAT, term, leaderID]
+		if len(args) < 3 {
+			return
+		}
+
+		term, _ := strconv.ParseInt(args[1], 10, 64)
+		leaderID := args[2] // e.g., ":6380"
+
+		// Ignore stale leader
+		if term < l.CurrentEpoch {
+			return
+		}
+
+		// Update term and role
+		l.CurrentEpoch = term
+		l.Role = RoleReplica
+		l.MasterUp = true
+		l.VotedFor = ""
+
+		// Check if we need to switch master
+		// leaderID is ":6380", MasterHost/Port might be "" or "localhost:6379"
+		// We need to parse leaderID to host/port
+		parts := strings.Split(leaderID, ":")
+		host := ""
+		port := ""
+		if len(parts) == 2 {
+			host = parts[0]
+			port = parts[1]
+		} else {
+			// Fallback if leaderID is just port "6380" or something
+			port = leaderID
+		}
+		if host == "" {
+			host = "localhost" // Assume localhost if leader didn't send IP
+		}
+
+		// If current master is different, switch
+		if l.MasterPort != port {
+			fmt.Printf("[follower] following new leader %s:%s (term %d)\n", host, port, term)
+			l.MasterHost = host
+			l.MasterPort = port
+			l.MasterUp = false
+
+			// Stop existing replication
+			select {
+			case l.StopReplication <- struct{}{}:
+			default:
+			}
+
+			go l.startReplication(l.MasterHost, l.MasterPort)
+		}
 
 	default:
 		protocol.WriteError(conn, "unknown command")

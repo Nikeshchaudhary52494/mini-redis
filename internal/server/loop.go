@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"mini-redis/internal/persistence"
 	"mini-redis/internal/store"
 	"time"
@@ -22,14 +23,43 @@ func NewEventLoop(store *store.Store, aof *persistence.AOF, maxMemory int64) *Ev
 }
 
 func (l *EventLoop) Start() {
-	for cmd := range l.Commands {
-		switch cmd.Type {
-		case ClientCommand:
-			l.execute(cmd)
-		case InternalExpireCommand:
-			l.runActiveExpiry()
-		case ReplicaRegister:
-			l.handleReplica(cmd.Replica)
+	if l.Role == RoleReplica && l.MasterHost == "" {
+		go l.scheduleAutoPromote()
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case cmd := <-l.Commands:
+			switch cmd.Type {
+			case ClientCommand:
+				l.execute(cmd)
+			case InternalExpireCommand:
+				l.runActiveExpiry()
+			case ReplicaRegister:
+				l.handleReplica(cmd.Replica)
+			case VoteResultCommand:
+				l.handleVoteResult(cmd)
+			case StartElectionCommand:
+				l.startElection()
+			}
+		case <-ticker.C:
+			l.tick()
 		}
+	}
+}
+
+func (l *EventLoop) tick() {
+	if l.Role == RoleCandidate {
+		if time.Since(l.ElectionStartTime) > l.ElectionDuration {
+			fmt.Println("[election] timeout, restarting election")
+			l.startElection()
+		}
+	}
+
+	if l.Role == RoleLeader {
+		l.broadcastHeartbeat()
 	}
 }

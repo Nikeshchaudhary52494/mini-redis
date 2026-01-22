@@ -13,6 +13,8 @@ const (
 	ClientCommand CommandType = iota
 	InternalExpireCommand
 	ReplicaRegister
+	VoteResultCommand
+	StartElectionCommand
 )
 
 type ServerRole int
@@ -20,13 +22,17 @@ type ServerRole int
 const (
 	RoleLeader ServerRole = iota
 	RoleReplica
+	RoleCandidate
 )
 
 type Command struct {
-	Type    CommandType
-	Conn    net.Conn
-	Args    []string
-	Replica *Replica
+	Type        CommandType
+	Conn        net.Conn
+	Args        []string
+	Replica     *Replica
+	Term        int64
+	CandidateID string
+	VoteGranted bool
 }
 
 type Replica struct {
@@ -54,4 +60,7 @@ type EventLoop struct {
 	Peers           []string
 	VotedEpoch      int64
 	VotedFor        string
+	VotesReceived   int
+	ElectionStartTime time.Time
+	ElectionDuration  time.Duration
 }

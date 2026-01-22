@@ -44,9 +44,11 @@ func main() {
 
 	const maxMemory = 1024 * 1024 // 1MB
 	loop := server.NewEventLoop(st, aof, maxMemory)
+	loop.NodeID = addr
 
 	if *peers != "" {
 		loop.Peers = strings.Split(*peers, ",")
+		loop.Role = server.RoleReplica
 	}
 
 	go loop.Start()
