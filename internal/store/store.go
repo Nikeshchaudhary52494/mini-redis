@@ -156,6 +156,10 @@ func (s *Store) EvictLRU(sampleSize int) bool {
 	return false
 }
 
+func (s *Store) Flush() {
+	s.data = make(map[string]Value)
+}
+
 func (s *Store) SnapshotCommands() [][]string {
 	cmds := make([][]string, 0)
 

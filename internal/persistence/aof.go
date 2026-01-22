@@ -84,6 +84,20 @@ func (a *AOF) Append(cmd []string) error {
 	return nil
 }
 
+func (a *AOF) Truncate() error {
+	if err := a.writer.Flush(); err != nil {
+		return err
+	}
+	if err := a.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := a.file.Seek(0, 0); err != nil {
+		return err
+	}
+	a.writer.Reset(a.file)
+	return nil
+}
+
 func (a *AOF) Close() error {
 	_ = a.writer.Flush()
 	_ = a.file.Sync()

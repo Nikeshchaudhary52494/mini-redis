@@ -33,6 +33,12 @@ func (l *EventLoop) startReplication(host, port string) {
 		return
 	}
 
+	// Reset state for fresh sync
+	l.Store.Flush()
+	if l.AOF != nil {
+		_ = l.AOF.Truncate()
+	}
+
 	// Snapshot
 	for {
 		args, err := protocol.ReadCommand(reader)
@@ -98,29 +104,38 @@ func (l *EventLoop) propagateToReplicas(args []string) {
 }
 
 func (l *EventLoop) applyReplicaCommand(args []string) {
-	if args[0] != "REPL" {
-		return
+	// Handle REPL wrapper
+	if args[0] == "REPL" {
+		epoch, _ := strconv.ParseInt(args[1], 10, 64)
+
+		// Reject stale leader
+		if epoch < l.MasterEpoch {
+			fmt.Println("[replica] stale epoch ignored:", epoch)
+			return
+		}
+
+		// Accept new leader epoch
+		l.MasterEpoch = epoch
+		if epoch > l.CurrentEpoch {
+			l.CurrentEpoch = epoch
+		}
+
+		// Unpack command
+		args = args[2:]
 	}
 
-	epoch, _ := strconv.ParseInt(args[1], 10, 64)
-
-	// Reject stale leader
-	if epoch < l.MasterEpoch {
-		fmt.Println("[replica] stale epoch ignored:", epoch)
-		return
-	}
-
-	// Accept new leader epoch
-	l.MasterEpoch = epoch
-	if epoch > l.CurrentEpoch {
-		l.CurrentEpoch = epoch
-	}
-
-	switch strings.ToUpper(args[2]) {
+	// Apply to store
+	switch strings.ToUpper(args[0]) {
 	case "SET":
-		l.Store.Set(args[3], args[4], 0)
+		l.Store.Set(args[1], args[2], 0)
+		if l.AOF != nil {
+			_ = l.AOF.Append(args)
+		}
 	case "DEL":
-		l.Store.Del(args[3])
+		l.Store.Del(args[1])
+		if l.AOF != nil {
+			_ = l.AOF.Append(args)
+		}
 	}
 }
 
