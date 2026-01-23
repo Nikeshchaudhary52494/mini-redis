@@ -36,6 +36,8 @@ It is designed to be a learning resource for understanding how distributed datab
 
 ## 🏗️ Architecture
 
+![over all architecture](mini_redis_architecture.png)
+
 The system runs as a cluster of nodes. An external load balancer (HAProxy) is provided for legacy clients, while modern applications use the Smart Client.
 
 ```
@@ -168,8 +170,8 @@ go build -o mini-redis cmd/server/main.go
 **3. Start Replicas:**
 
 ```bash
-./mini-redis -port 6380 -peers "localhost:6381"
-./mini-redis -port 6381 -peers "localhost:6380"
+./mini-redis -port 6380 -peers "localhost:6381, localhost:6379"
+./mini-redis -port 6381 -peers "localhost:6380, localhost:6379"
 ```
 
 _(Note: Replicas will auto-discover the leader via the peers list or need `REPLICAOF` command manually if not using the discovery logic)._
